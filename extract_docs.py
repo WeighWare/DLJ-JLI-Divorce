@@ -143,6 +143,30 @@ class DocumentExtractor:
         
         return False
     
+    def _infer_category(self, filename: str) -> str:
+        """Infer document category from filename."""
+        filename_lower = filename.lower()
+        
+        if "transcript" in filename_lower:
+            return "transcript"
+        elif "bank" in filename_lower or "statement" in filename_lower:
+            return "financial"
+        elif any(term in filename_lower for term in ["report", "exhibit", "affidavit"]):
+            return "legal"
+        else:
+            return "other"
+    
+    def _create_chunk_metadata(self, doc_id: str, filename: str, page_num: int, category: str, file_hash: str) -> str:
+        """Create chunk metadata HTML comment for markdown files."""
+        chunk_id = f"{doc_id}_p{page_num}"
+        return f"""<!--
+chunk_id: {chunk_id}
+source: {filename}
+page: {page_num}
+category: {category}
+hash: {file_hash}
+-->"""
+    
     def _init_processors(self):
         """Initialize available processing tools."""
         self.processors = {}
@@ -264,7 +288,16 @@ class DocumentExtractor:
                         end_line = min(page_num * lines_per_page, len(content_lines))
                         page_content = '\n'.join(content_lines[start_line:end_line])
                     
-                    md_content = f"""# {pdf_path.name} - Page {page_num}
+                    # Create chunk metadata
+                    chunk_metadata = self._create_chunk_metadata(
+                        doc_id, pdf_path.name, page_num, 
+                        self._infer_category(pdf_path.name), 
+                        self._calculate_file_hash(pdf_path)
+                    )
+                    
+                    md_content = f"""{chunk_metadata}
+
+# {pdf_path.name} - Page {page_num}
 
 ## Content
 {page_content}
@@ -330,7 +363,16 @@ class DocumentExtractor:
                 # Get page content
                 page_text = page.text if hasattr(page, 'text') else str(page)
                 
-                md_content = f"""# {pdf_path.name} - Page {page_num}
+                # Create chunk metadata
+                chunk_metadata = self._create_chunk_metadata(
+                    doc_id, pdf_path.name, page_num, 
+                    self._infer_category(pdf_path.name), 
+                    self._calculate_file_hash(pdf_path)
+                )
+                
+                md_content = f"""{chunk_metadata}
+
+# {pdf_path.name} - Page {page_num}
 
 ## Content
 {page_text}
@@ -447,10 +489,14 @@ class DocumentExtractor:
             doc_logger.info(f"File skipped - duplicate detected (same SHA-256 hash)")
             return self.index_data[doc_id]
         
+        file_hash = self._calculate_file_hash(pdf_path)
+        category = self._infer_category(pdf_path.name)
+        
         results = {
             "filename": pdf_path.name,
-            "hash": self._calculate_file_hash(pdf_path),
+            "hash": file_hash,
             "type": "pdf",
+            "category": category,
             "pages": 0,
             "output_md": [],
             "output_csv": [],
@@ -500,7 +546,15 @@ class DocumentExtractor:
                     page_num = page_info["page_number"]
                     md_file = doc_md_dir / f"p{page_num}.md"
                     
-                    md_content = f"""# {pdf_path.name} - Page {page_num}
+                    # Create chunk metadata
+                    chunk_metadata = self._create_chunk_metadata(
+                        doc_id, pdf_path.name, page_num, 
+                        category, file_hash
+                    )
+                    
+                    md_content = f"""{chunk_metadata}
+
+# {pdf_path.name} - Page {page_num}
 
 ## Content
 {page_info["text"]}
@@ -558,10 +612,14 @@ class DocumentExtractor:
             doc_logger.info(f"File skipped - duplicate detected (same SHA-256 hash)")
             return self.index_data[doc_id]
         
+        file_hash = self._calculate_file_hash(excel_path)
+        category = self._infer_category(excel_path.name)
+        
         results = {
             "filename": excel_path.name,
-            "hash": self._calculate_file_hash(excel_path),
+            "hash": file_hash,
             "type": "excel",
+            "category": category,
             "pages": 0,  # sheets for Excel
             "output_md": [],
             "output_csv": [],
@@ -592,7 +650,15 @@ class DocumentExtractor:
                 # Create Markdown summary
                 md_file = doc_md_dir / f"{safe_sheet}.md"
                 
-                md_content = f"""# {excel_path.name} - Sheet: {sheet_name}
+                # Create chunk metadata (using sheet index as page number)
+                chunk_metadata = self._create_chunk_metadata(
+                    doc_id, excel_path.name, sheet_idx, 
+                    category, file_hash
+                )
+                
+                md_content = f"""{chunk_metadata}
+
+# {excel_path.name} - Sheet: {sheet_name}
 
 ## Summary
 - Document ID: {doc_id}
@@ -655,10 +721,14 @@ class DocumentExtractor:
             doc_logger.info(f"File skipped - duplicate detected (same SHA-256 hash)")
             return self.index_data[doc_id]
         
+        file_hash = self._calculate_file_hash(csv_path)
+        category = self._infer_category(csv_path.name)
+        
         results = {
             "filename": csv_path.name,
-            "hash": self._calculate_file_hash(csv_path),
+            "hash": file_hash,
             "type": "csv",
+            "category": category,
             "pages": 1,
             "output_md": [],
             "output_csv": [],
@@ -683,7 +753,15 @@ class DocumentExtractor:
             # Create Markdown summary
             md_file = doc_md_dir / f"{doc_id}.md"
             
-            md_content = f"""# {csv_path.name}
+            # Create chunk metadata (CSV files are single page)
+            chunk_metadata = self._create_chunk_metadata(
+                doc_id, csv_path.name, 1, 
+                category, file_hash
+            )
+            
+            md_content = f"""{chunk_metadata}
+
+# {csv_path.name}
 
 ## Summary
 - Document ID: {doc_id}
@@ -761,7 +839,7 @@ class DocumentExtractor:
             return {"total_files": 0, "successful": 0, "failed": 0, "skipped": 0, "processing_time": 0}
         
         results = []
-        skipped_count = 0
+        skipped_files = []
         
         for file_path in files:
             doc_id = self._get_doc_id(file_path)
@@ -769,7 +847,7 @@ class DocumentExtractor:
             # Quick duplicate check before processing
             if self._check_duplicate(file_path, doc_id):
                 self.logger.info(f"Skipping duplicate: {file_path.name}")
-                skipped_count += 1
+                skipped_files.append(file_path.name)
                 continue
                 
             result = self.process_file(file_path)
@@ -790,7 +868,7 @@ class DocumentExtractor:
             "processed": len(results),
             "successful": successful,
             "failed": failed,
-            "skipped": skipped_count,
+            "skipped": len(skipped_files),
             "total_pages": total_pages,
             "total_md_files": total_md,
             "total_csv_files": total_csv,
@@ -811,7 +889,48 @@ class DocumentExtractor:
         self.logger.info(f"Processing time: {summary['processing_time']:.2f} seconds")
         self.logger.info(f"Index file: {self.index_file}")
         
+        # Print summary table
+        self._print_summary_table(results, skipped_files)
+        
         return summary
+    
+    def _print_summary_table(self, results: List[Dict], skipped_files: List[str]):
+        """Print a formatted summary table of processing results."""
+        # Collect all processed files and their statuses
+        table_data = []
+        
+        # Add processed files
+        for result in results:
+            filename = result.get("filename", "Unknown")
+            status = result.get("status", "unknown")
+            
+            if status == "completed":
+                status_symbol = "✅ OK"
+            elif status == "failed":
+                status_symbol = "❌ Failed"
+            else:
+                status_symbol = "❓ Unknown"
+                
+            table_data.append((filename, status_symbol))
+        
+        # Add skipped files
+        for filename in skipped_files:
+            table_data.append((filename, "⚠️ Skipped"))
+        
+        if not table_data:
+            return
+            
+        # Print table
+        print("\n" + "=" * 50)
+        print("| {:<30} | {:<12} |".format("File", "Status"))
+        print("|" + "-" * 32 + "|" + "-" * 14 + "|")
+        
+        for filename, status in table_data:
+            # Truncate long filenames
+            display_name = filename[:28] + ".." if len(filename) > 30 else filename
+            print("| {:<30} | {:<12} |".format(display_name, status))
+            
+        print("=" * 50)
 
 
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
