@@ -14,6 +14,8 @@ A comprehensive Python tool for extracting content from divorce-related document
 - **Duplicate Detection**: SHA-256 hashing prevents reprocessing identical files
 - **Summary Reporting**: Visual status table showing processing results
 - **Per-document Organization**: Creates subfolders for each document's outputs
+- **Vector Embeddings**: Document chunking and embedding with OpenAI API
+- **Vector Search**: Semantic search using ChromaDB or FAISS
 - **Automated Workflow**: GitHub Actions support for CI/CD processing
 
 ## Installation
@@ -65,6 +67,12 @@ python extract_docs.py [options]
 - `--input, -i <dir>`: Input directory (default: `docs`)
 - `--output, -o <dir>`: Output directory (default: `build`)
 - `--verbose, -v`: Enable verbose logging
+- `--embed`: Enable document chunking and embedding (requires OpenAI API key)
+- `--embedding-model <model>`: OpenAI embedding model (default: `text-embedding-3-small`)
+- `--vector-db <db>`: Vector database: `chromadb` or `faiss` (default: `chromadb`)
+- `--chunk-size <size>`: Text chunk size for embedding (default: `1000`)
+- `--chunk-overlap <overlap>`: Overlap between chunks (default: `200`)
+- `--search <query>`: Test search query after processing (requires `--embed`)
 - `--help`: Show help message
 
 ### Examples
@@ -76,9 +84,42 @@ python extract_docs.py --input my_documents
 # Use custom output directory with verbose logging
 python extract_docs.py --input docs --output results --verbose
 
+# Enable document embedding with OpenAI
+python extract_docs.py --embed
+
+# Use specific embedding model and vector database
+python extract_docs.py --embed --embedding-model text-embedding-3-large --vector-db faiss
+
+# Process and test search functionality
+python extract_docs.py --embed --search "financial statements"
+
 # Process specific directory structure
 python extract_docs.py -i /path/to/files -o /path/to/output -v
 ```
+
+### Vector Embeddings and Search
+
+When enabled with `--embed`, the tool provides advanced semantic search capabilities:
+
+```bash
+# Basic embedding (requires OPENAI_API_KEY environment variable)
+python extract_docs.py --embed
+
+# Customize embedding parameters
+python extract_docs.py --embed \
+  --embedding-model text-embedding-3-small \
+  --vector-db chromadb \
+  --chunk-size 1000 \
+  --chunk-overlap 200
+
+# Test search after processing
+python extract_docs.py --embed --search "custody arrangements"
+```
+
+**Requirements for embeddings:**
+- OpenAI API key (set `OPENAI_API_KEY` environment variable)
+- Internet connection for API calls
+- Additional dependencies: `langchain`, `chromadb` or `faiss-cpu`
 
 ## Directory Structure
 
@@ -104,6 +145,9 @@ project/
 │   │   └── spreadsheet/
 │   │       ├── Sheet1.csv
 │   │       └── Sheet2.csv
+│   ├── vectors/             # Vector database files (when --embed enabled)
+│   │   ├── chroma.sqlite3   # ChromaDB database
+│   │   └── index.faiss      # FAISS index (if using FAISS)
 │   ├── logs/                # Processing logs (per document)
 │   │   ├── document1.log
 │   │   ├── spreadsheet.log
@@ -216,6 +260,38 @@ Status indicators:
 - **⚠️ Skipped**: Duplicate file (already processed)
 - **❓ Unknown**: Unexpected status
 
+## Vector Search Capabilities
+
+When embeddings are enabled, the tool creates a searchable vector database of your documents:
+
+### Automatic Processing
+- **Document Chunking**: Splits documents into manageable chunks (default: 1000 characters with 200 overlap)
+- **Vector Embeddings**: Creates semantic embeddings using OpenAI's API
+- **Vector Storage**: Stores embeddings in ChromaDB (persistent) or FAISS (file-based)
+- **Metadata Preservation**: Maintains document categories, page numbers, and source information
+
+### Search Features
+- **Semantic Search**: Find content by meaning, not just exact text matches
+- **Ranked Results**: Results sorted by similarity score
+- **Rich Metadata**: Each result includes source file, page number, category, and content preview
+- **Fast Retrieval**: Optimized vector search for large document collections
+
+### Example Search Results
+```
+Testing search with query: 'financial statements'
+
+Search results:
+  1. Score: 0.85
+     Source: md/bank_statements/p1.md
+     Category: financial
+     Content preview: The monthly bank statement shows deposits totaling $15,000...
+
+  2. Score: 0.82
+     Source: md/expert_report/p5.md
+     Category: legal
+     Content preview: Analysis of financial records indicates significant...
+```
+
 ## GitHub Actions Integration
 
 The repository includes a GitHub Actions workflow for automated processing:
@@ -243,6 +319,12 @@ Set these in your `.env` file or environment:
 - `INPUT_DIR`: Input directory path (default: `docs`)
 - `OUTPUT_DIR`: Output directory path (default: `build`)
 - `LOG_LEVEL`: Logging level - DEBUG, INFO, WARNING, ERROR (default: `INFO`)
+- `OPENAI_API_KEY`: OpenAI API key for embeddings (required for `--embed`)
+- `EMBEDDING_MODEL`: OpenAI embedding model (default: `text-embedding-3-small`)
+- `VECTOR_DB`: Vector database type - chromadb or faiss (default: `chromadb`)
+- `CHUNK_SIZE`: Text chunk size for embedding (default: `1000`)
+- `CHUNK_OVERLAP`: Overlap between text chunks (default: `200`)
+- `ENABLE_EMBEDDINGS`: Enable embeddings by default - true or false (default: `false`)
 
 ### Processing Behavior
 
@@ -281,6 +363,18 @@ The tool automatically:
    # https://www.ghostscript.com/download/gsdnld.html
    ```
 
+5. **Embedding Issues**
+   ```bash
+   # Missing OpenAI API key
+   export OPENAI_API_KEY=your_api_key_here
+   
+   # Install embedding dependencies
+   pip install langchain langchain-openai chromadb faiss-cpu
+   
+   # Check embedding status in logs
+   python extract_docs.py --embed --verbose
+   ```
+
 ### Performance Tips
 
 - Process files in smaller batches for large datasets
@@ -290,17 +384,18 @@ The tool automatically:
 
 ## Supported File Types
 
-| Extension | Processing Method | Output | Auto-Categorization |
-|-----------|------------------|---------|-------------------|
-| `.pdf` | MarkItDown, Docling, pdfplumber, Camelot | Per-page MD + tables CSV | ✅ Based on filename |
-| `.xlsx` | pandas | Per-sheet MD + CSV | ✅ Based on filename |
-| `.csv` | pandas | Summary MD + processed CSV | ✅ Based on filename |
+| Extension | Processing Method | Output | Auto-Categorization | Vector Embeddings |
+|-----------|------------------|---------|-------------------|-------------------|
+| `.pdf` | MarkItDown, Docling, pdfplumber, Camelot | Per-page MD + tables CSV | ✅ Based on filename | ✅ With --embed |
+| `.xlsx` | pandas | Per-sheet MD + CSV | ✅ Based on filename | ✅ With --embed |
+| `.csv` | pandas | Summary MD + processed CSV | ✅ Based on filename | ✅ With --embed |
 
 All outputs include:
 - **Chunk metadata** embedded in Markdown files
 - **Document categorization** (transcript/financial/legal/other)
 - **Duplicate detection** via SHA-256 hashing
 - **Per-document organization** in subfolders
+- **Vector embeddings** (when enabled) for semantic search
 
 ## Contributing
 

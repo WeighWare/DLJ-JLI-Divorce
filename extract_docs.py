@@ -43,11 +43,302 @@ try:
 except ImportError:
     DOCLING_AVAILABLE = False
 
+# Import embedding libraries with graceful fallbacks
+try:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_openai import OpenAIEmbeddings
+    from langchain_community.vectorstores import Chroma, FAISS
+    from langchain.schema import Document
+    import tiktoken
+    EMBEDDING_AVAILABLE = True
+except ImportError:
+    EMBEDDING_AVAILABLE = False
+
+
+class EmbeddingProcessor:
+    """Handles document chunking and embedding for vector search."""
+    
+    def __init__(self, 
+                 chunk_size: int = 1000,
+                 chunk_overlap: int = 200,
+                 embedding_model: str = "text-embedding-3-small",
+                 vector_db: str = "chromadb",
+                 vector_store_path: str = None,
+                 logger: logging.Logger = None):
+        """
+        Initialize the embedding processor.
+        
+        Args:
+            chunk_size: Size of text chunks for processing
+            chunk_overlap: Overlap between chunks
+            embedding_model: OpenAI embedding model to use
+            vector_db: Vector database type (chromadb or faiss)
+            vector_store_path: Path to store vector database
+            logger: Logger instance
+        """
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.embedding_model = embedding_model
+        self.vector_db = vector_db
+        self.vector_store_path = Path(vector_store_path) if vector_store_path else None
+        self.logger = logger or logging.getLogger(__name__)
+        
+        if not EMBEDDING_AVAILABLE:
+            self.logger.error("Embedding libraries not available. Install langchain, openai, and chromadb/faiss.")
+            return
+            
+        # Initialize text splitter
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        
+        # Initialize embeddings
+        try:
+            self.embeddings = OpenAIEmbeddings(model=embedding_model)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize OpenAI embeddings: {e}")
+            self.embeddings = None
+        
+        # Initialize vector store
+        self.vector_store = None
+        self._init_vector_store()
+    
+    def _init_vector_store(self):
+        """Initialize the vector store."""
+        if not self.embeddings:
+            return
+            
+        try:
+            if self.vector_db.lower() == "chromadb":
+                if self.vector_store_path:
+                    self.vector_store = Chroma(
+                        persist_directory=str(self.vector_store_path),
+                        embedding_function=self.embeddings
+                    )
+                else:
+                    # In-memory ChromaDB
+                    self.vector_store = Chroma(embedding_function=self.embeddings)
+                    
+            elif self.vector_db.lower() == "faiss":
+                # FAISS will be initialized when we add documents
+                self.vector_store = None
+                
+            self.logger.info(f"Initialized {self.vector_db} vector store")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize vector store: {e}")
+            self.vector_store = None
+    
+    def chunk_document(self, doc_id: str, content: str, metadata: Dict = None) -> List[Document]:
+        """
+        Chunk a document into smaller pieces for embedding.
+        
+        Args:
+            doc_id: Document identifier
+            content: Document content to chunk
+            metadata: Additional metadata for the document
+            
+        Returns:
+            List of LangChain Document objects
+        """
+        if not content.strip():
+            return []
+        
+        # Split text into chunks
+        chunks = self.text_splitter.split_text(content)
+        
+        # Create Document objects with metadata
+        documents = []
+        base_metadata = metadata or {}
+        
+        for i, chunk in enumerate(chunks):
+            chunk_metadata = {
+                **base_metadata,
+                "doc_id": doc_id,
+                "chunk_id": f"{doc_id}_chunk_{i}",
+                "chunk_index": i,
+                "chunk_size": len(chunk)
+            }
+            
+            documents.append(Document(
+                page_content=chunk,
+                metadata=chunk_metadata
+            ))
+        
+        self.logger.info(f"Created {len(documents)} chunks for document {doc_id}")
+        return documents
+    
+    def embed_documents(self, documents: List[Document]) -> bool:
+        """
+        Embed and store documents in the vector database.
+        
+        Args:
+            documents: List of LangChain Document objects to embed
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not documents or not self.vector_store:
+            return False
+        
+        try:
+            if self.vector_db.lower() == "chromadb":
+                # Add documents to ChromaDB
+                self.vector_store.add_documents(documents)
+                
+            elif self.vector_db.lower() == "faiss":
+                # For FAISS, create or update the index
+                if self.vector_store is None:
+                    self.vector_store = FAISS.from_documents(documents, self.embeddings)
+                else:
+                    new_store = FAISS.from_documents(documents, self.embeddings)
+                    self.vector_store.merge_from(new_store)
+                
+                # Save FAISS index if path provided
+                if self.vector_store_path:
+                    self.vector_store.save_local(str(self.vector_store_path))
+            
+            self.logger.info(f"Successfully embedded {len(documents)} document chunks")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to embed documents: {e}")
+            return False
+    
+    def process_extracted_content(self, doc_id: str, md_files: List[str], category: str, 
+                                 file_hash: str, base_path: Path) -> bool:
+        """
+        Process extracted markdown files and create embeddings.
+        
+        Args:
+            doc_id: Document identifier
+            md_files: List of markdown file paths (relative to base_path)
+            category: Document category
+            file_hash: SHA-256 hash of source file
+            base_path: Base path for resolving file paths
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not EMBEDDING_AVAILABLE or not self.embeddings:
+            self.logger.warning("Embedding not available, skipping")
+            return False
+        
+        all_documents = []
+        
+        for md_file_rel in md_files:
+            md_file = base_path / md_file_rel
+            
+            if not md_file.exists():
+                self.logger.warning(f"Markdown file not found: {md_file}")
+                continue
+            
+            try:
+                # Read markdown content
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # Remove metadata comments from content for embedding
+                lines = content.split('\n')
+                filtered_lines = []
+                in_comment = False
+                
+                for line in lines:
+                    if line.strip().startswith('<!--'):
+                        in_comment = True
+                    elif line.strip().endswith('-->'):
+                        in_comment = False
+                        continue
+                    elif not in_comment:
+                        filtered_lines.append(line)
+                
+                clean_content = '\n'.join(filtered_lines).strip()
+                
+                if not clean_content:
+                    continue
+                
+                # Create metadata for this file
+                metadata = {
+                    "source_file": str(md_file_rel),
+                    "doc_id": doc_id,
+                    "category": category,
+                    "file_hash": file_hash,
+                    "file_type": "markdown"
+                }
+                
+                # Extract page number from filename if it's a page-based file
+                if '_p' in md_file.stem:
+                    try:
+                        page_part = md_file.stem.split('_p')[-1]
+                        page_num = int(page_part.split('_')[0])
+                        metadata["page"] = page_num
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Chunk the document
+                doc_chunks = self.chunk_document(
+                    doc_id=f"{doc_id}_{md_file.stem}",
+                    content=clean_content,
+                    metadata=metadata
+                )
+                
+                all_documents.extend(doc_chunks)
+                
+            except Exception as e:
+                self.logger.error(f"Failed to process {md_file}: {e}")
+                continue
+        
+        if all_documents:
+            return self.embed_documents(all_documents)
+        
+        return False
+    
+    def search_similar(self, query: str, k: int = 5) -> List[Dict]:
+        """
+        Search for similar documents.
+        
+        Args:
+            query: Search query
+            k: Number of results to return
+            
+        Returns:
+            List of similar documents with metadata
+        """
+        if not self.vector_store:
+            return []
+        
+        try:
+            # Perform similarity search
+            results = self.vector_store.similarity_search_with_score(query, k=k)
+            
+            # Format results
+            formatted_results = []
+            for doc, score in results:
+                formatted_results.append({
+                    "content": doc.page_content,
+                    "metadata": doc.metadata,
+                    "similarity_score": score
+                })
+            
+            return formatted_results
+            
+        except Exception as e:
+            self.logger.error(f"Search failed: {e}")
+            return []
+
 
 class DocumentExtractor:
     """Main document extraction class with enhanced batching and metadata tracking."""
     
     def __init__(self, input_dir: str = "docs", output_dir: str = "build", 
+                 enable_embeddings: bool = False,
+                 chunk_size: int = 1000,
+                 chunk_overlap: int = 200,
+                 embedding_model: str = "text-embedding-3-small",
+                 vector_db: str = "chromadb",
                  logger: logging.Logger = None):
         """
         Initialize the document extractor.
@@ -55,18 +346,25 @@ class DocumentExtractor:
         Args:
             input_dir: Input directory containing documents
             output_dir: Output directory for processed files
+            enable_embeddings: Whether to enable document embedding
+            chunk_size: Size of text chunks for embedding
+            chunk_overlap: Overlap between chunks
+            embedding_model: OpenAI embedding model to use
+            vector_db: Vector database type (chromadb or faiss)
             logger: Logger instance
         """
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
+        self.enable_embeddings = enable_embeddings
         self.logger = logger or logging.getLogger(__name__)
         
         # Create base output directories
         self.md_dir = self.output_dir / "md"
         self.csv_dir = self.output_dir / "csv"
         self.logs_dir = self.output_dir / "logs"
+        self.vector_dir = self.output_dir / "vectors"
         
-        for dir_path in [self.md_dir, self.csv_dir, self.logs_dir]:
+        for dir_path in [self.md_dir, self.csv_dir, self.logs_dir, self.vector_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
             
         # Initialize master index
@@ -75,6 +373,16 @@ class DocumentExtractor:
         
         # Initialize processors
         self._init_processors()
+        
+        # Initialize embedding processor if enabled
+        self.embedding_processor = None
+        if enable_embeddings:
+            self._init_embedding_processor(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                embedding_model=embedding_model,
+                vector_db=vector_db
+            )
     
     def _load_index(self) -> Dict:
         """Load or create the master index file."""
@@ -182,6 +490,98 @@ hash: {file_hash}
             available.extend(["pdfplumber", "camelot"])
             
         self.logger.info(f"Available processors: {available}")
+    
+    def _init_embedding_processor(self, chunk_size: int, chunk_overlap: int, 
+                                 embedding_model: str, vector_db: str):
+        """Initialize the embedding processor."""
+        try:
+            self.embedding_processor = EmbeddingProcessor(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                embedding_model=embedding_model,
+                vector_db=vector_db,
+                vector_store_path=str(self.vector_dir),
+                logger=self.logger
+            )
+            
+            if self.embedding_processor.embeddings:
+                self.logger.info(f"Embedding processor initialized with {embedding_model} and {vector_db}")
+            else:
+                self.logger.warning("Embedding processor initialized but embeddings unavailable")
+                self.embedding_processor = None
+                
+        except Exception as e:
+            self.logger.error(f"Failed to initialize embedding processor: {e}")
+            self.embedding_processor = None
+    
+    def _embed_document_result(self, result: Dict):
+        """
+        Create embeddings for a processed document result.
+        
+        Args:
+            result: Document processing result dictionary
+        """
+        if not self.embedding_processor:
+            return
+        
+        try:
+            doc_id = result.get("doc_id", "unknown")
+            md_files = result.get("output_md", [])
+            category = result.get("category", "other")
+            file_hash = result.get("hash", "")
+            
+            if not md_files:
+                return
+            
+            self.logger.info(f"Creating embeddings for document: {doc_id}")
+            
+            # Process the extracted content
+            success = self.embedding_processor.process_extracted_content(
+                doc_id=doc_id,
+                md_files=md_files,
+                category=category,
+                file_hash=file_hash,
+                base_path=self.output_dir
+            )
+            
+            if success:
+                # Add embedding info to result
+                result["embeddings"] = {
+                    "status": "completed",
+                    "vector_db": self.embedding_processor.vector_db,
+                    "chunk_count": len(md_files)  # This is approximate
+                }
+                self.logger.info(f"Successfully created embeddings for {doc_id}")
+            else:
+                result["embeddings"] = {
+                    "status": "failed",
+                    "error": "Failed to create embeddings"
+                }
+                self.logger.warning(f"Failed to create embeddings for {doc_id}")
+                
+        except Exception as e:
+            self.logger.error(f"Error creating embeddings: {e}")
+            result["embeddings"] = {
+                "status": "failed", 
+                "error": str(e)
+            }
+    
+    def search_documents(self, query: str, k: int = 5) -> List[Dict]:
+        """
+        Search for similar documents using vector similarity.
+        
+        Args:
+            query: Search query
+            k: Number of results to return
+            
+        Returns:
+            List of similar documents with metadata
+        """
+        if not self.embedding_processor:
+            self.logger.error("Embedding processor not available. Enable embeddings with --embed")
+            return []
+        
+        return self.embedding_processor.search_similar(query, k)
     
     def discover_files(self) -> List[Path]:
         """
@@ -810,15 +1210,26 @@ hash: {file_hash}
             Processing results dictionary
         """
         try:
+            # Process the document first
             if file_path.suffix.lower() == ".pdf":
-                return self.process_pdf(file_path)
+                result = self.process_pdf(file_path)
             elif file_path.suffix.lower() == ".xlsx":
-                return self.process_excel(file_path)
+                result = self.process_excel(file_path)
             elif file_path.suffix.lower() == ".csv":
-                return self.process_csv(file_path)
+                result = self.process_csv(file_path)
             else:
                 self.logger.warning(f"Unsupported file type: {file_path}")
                 return {"filename": file_path.name, "status": "failed", "error": "Unsupported file type"}
+            
+            # Add embedding step if enabled and processing was successful
+            if (self.enable_embeddings and 
+                self.embedding_processor and 
+                result.get("status") == "completed" and 
+                result.get("output_md")):
+                
+                self._embed_document_result(result)
+            
+            return result
                 
         except Exception as e:
             self.logger.error(f"Error processing {file_path}: {e}")
@@ -863,6 +1274,10 @@ hash: {file_hash}
         total_md = sum(len(r.get("output_md", [])) for r in results)
         total_csv = sum(len(r.get("output_csv", [])) for r in results)
         
+        # Embedding statistics
+        embedded_docs = sum(1 for r in results if r.get("embeddings", {}).get("status") == "completed")
+        embedding_failures = sum(1 for r in results if r.get("embeddings", {}).get("status") == "failed")
+        
         summary = {
             "total_files": len(files),
             "processed": len(results),
@@ -872,6 +1287,8 @@ hash: {file_hash}
             "total_pages": total_pages,
             "total_md_files": total_md,
             "total_csv_files": total_csv,
+            "embedded_docs": embedded_docs,
+            "embedding_failures": embedding_failures,
             "processing_time": processing_time
         }
         
@@ -886,6 +1303,11 @@ hash: {file_hash}
         self.logger.info(f"Total pages/sheets extracted: {summary['total_pages']}")
         self.logger.info(f"Total MD files created: {summary['total_md_files']}")
         self.logger.info(f"Total CSV files created: {summary['total_csv_files']}")
+        if self.enable_embeddings:
+            self.logger.info(f"Documents embedded: {summary['embedded_docs']}")
+            self.logger.info(f"Embedding failures: {summary['embedding_failures']}")
+            if self.embedding_processor:
+                self.logger.info(f"Vector store: {self.embedding_processor.vector_db}")
         self.logger.info(f"Processing time: {summary['processing_time']:.2f} seconds")
         self.logger.info(f"Index file: {self.index_file}")
         
@@ -973,19 +1395,24 @@ def main():
     load_dotenv()
     
     parser = argparse.ArgumentParser(
-        description="Enhanced Document Extraction Tool with Batching and Metadata Tracking",
+        description="Enhanced Document Extraction Tool with Batching, Metadata Tracking, and Vector Embeddings",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python extract_docs.py                    # Extract all files from docs/
-  python extract_docs.py --input my_docs   # Extract from custom input directory
-  python extract_docs.py --verbose         # Enable verbose logging
+  python extract_docs.py                           # Extract all files from docs/
+  python extract_docs.py --input my_docs          # Extract from custom input directory
+  python extract_docs.py --verbose                # Enable verbose logging
+  python extract_docs.py --embed                  # Enable embeddings (requires OpenAI API key)
+  python extract_docs.py --embed --vector-db faiss # Use FAISS vector database
 
 Features:
   - Document-level batching with per-document subdirectories
   - SHA-256 hash-based duplicate detection
   - Master index.json for metadata tracking
   - Per-document logging
+  - Document chunking and vector embeddings
+  - Vector search with ChromaDB or FAISS
+  - OpenAI embeddings integration
   - Preserves all existing extraction capabilities
         """
     )
@@ -1010,6 +1437,49 @@ Features:
         help="Enable verbose logging"
     )
     
+    # Embedding arguments
+    parser.add_argument(
+        "--embed",
+        action="store_true",
+        default=os.getenv("ENABLE_EMBEDDINGS", "false").lower() == "true",
+        help="Enable document chunking and embedding (requires OpenAI API key)"
+    )
+    
+    parser.add_argument(
+        "--embedding-model",
+        type=str,
+        default=os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+        help="OpenAI embedding model to use (default: text-embedding-3-small)"
+    )
+    
+    parser.add_argument(
+        "--vector-db",
+        type=str,
+        choices=["chromadb", "faiss"],
+        default=os.getenv("VECTOR_DB", "chromadb"),
+        help="Vector database to use (default: chromadb)"
+    )
+    
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=int(os.getenv("CHUNK_SIZE", "1000")),
+        help="Size of text chunks for embedding (default: 1000)"
+    )
+    
+    parser.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=int(os.getenv("CHUNK_OVERLAP", "200")),
+        help="Overlap between text chunks (default: 200)"
+    )
+    
+    parser.add_argument(
+        "--search",
+        type=str,
+        help="Test search query after processing (requires --embed)"
+    )
+    
     args = parser.parse_args()
     
     # Set up logging
@@ -1020,6 +1490,11 @@ Features:
     logger.info("Starting enhanced document extraction")
     logger.info(f"Input directory: {args.input}")
     logger.info(f"Output directory: {args.output}")
+    logger.info(f"Embeddings enabled: {args.embed}")
+    if args.embed:
+        logger.info(f"Embedding model: {args.embedding_model}")
+        logger.info(f"Vector database: {args.vector_db}")
+        logger.info(f"Chunk size: {args.chunk_size}, overlap: {args.chunk_overlap}")
     
     # Create input directory if it doesn't exist
     input_path = Path(args.input)
@@ -1033,10 +1508,33 @@ Features:
     extractor = DocumentExtractor(
         input_dir=args.input,
         output_dir=args.output,
+        enable_embeddings=args.embed,
+        chunk_size=args.chunk_size,
+        chunk_overlap=args.chunk_overlap,
+        embedding_model=args.embedding_model,
+        vector_db=args.vector_db,
         logger=logger
     )
     
     summary = extractor.extract_all()
+    
+    # Test search functionality if query provided
+    if args.search and args.embed:
+        logger.info(f"\nTesting search with query: '{args.search}'")
+        search_results = extractor.search_documents(args.search, k=3)
+        
+        if search_results:
+            logger.info("Search results:")
+            for i, result in enumerate(search_results, 1):
+                logger.info(f"  {i}. Score: {result.get('similarity_score', 'N/A')}")
+                logger.info(f"     Source: {result['metadata'].get('source_file', 'Unknown')}")
+                logger.info(f"     Category: {result['metadata'].get('category', 'Unknown')}")
+                logger.info(f"     Content preview: {result['content'][:200]}...")
+                logger.info("")
+        else:
+            logger.warning("No search results found")
+    elif args.search and not args.embed:
+        logger.warning("Search requires --embed flag to be enabled")
     
     if summary["successful"] == 0 and summary["skipped"] == 0:
         logger.warning("No files were successfully processed.")
