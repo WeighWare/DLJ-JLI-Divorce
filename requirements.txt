@@ -1,7 +1,0 @@
-pdfplumber
-pytesseract
-camelot-py[cv]
-opencv-python
-pandas
-python-dotenv
-PyYAML 
