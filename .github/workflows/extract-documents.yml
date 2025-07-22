@@ -65,16 +65,17 @@ jobs:
         find ${{ inputs.output_directory || 'build' }}/logs -name "*.log" -type f | head -10 || echo "No log files found"
         
     - name: Upload extraction results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: document-extraction-results
+        name: ingest-output
         path: |
-          ${{ inputs.output_directory || 'build' }}/
+          ${{ inputs.output_directory || 'build' }}/md/
+          ${{ inputs.output_directory || 'build' }}/csv/
         retention-days: 30
         
     - name: Upload logs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: extraction-logs
