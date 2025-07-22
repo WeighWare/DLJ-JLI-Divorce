@@ -1,0 +1,105 @@
+name: Document Extraction Workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      input_directory:
+        description: 'Input directory containing documents'
+        required: false
+        default: 'docs'
+        type: string
+      output_directory:
+        description: 'Output directory for processed files'
+        required: false
+        default: 'build'
+        type: string
+      verbose:
+        description: 'Enable verbose logging'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  extract-documents:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ghostscript
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create input directory if it doesn't exist
+      run: |
+        mkdir -p ${{ inputs.input_directory || 'docs' }}
+        
+    - name: Run document extraction
+      run: |
+        python extract_docs.py \
+          --input "${{ inputs.input_directory || 'docs' }}" \
+          --output "${{ inputs.output_directory || 'build' }}" \
+          ${{ inputs.verbose && '--verbose' || '' }}
+          
+    - name: List extracted files
+      run: |
+        echo "=== Extracted Markdown Files ==="
+        find ${{ inputs.output_directory || 'build' }}/md -name "*.md" -type f | head -20 || echo "No markdown files found"
+        
+        echo "=== Extracted CSV Files ==="
+        find ${{ inputs.output_directory || 'build' }}/csv -name "*.csv" -type f | head -20 || echo "No CSV files found"
+        
+        echo "=== Processing Logs ==="
+        find ${{ inputs.output_directory || 'build' }}/logs -name "*.log" -type f | head -10 || echo "No log files found"
+        
+    - name: Upload extraction results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: document-extraction-results
+        path: |
+          ${{ inputs.output_directory || 'build' }}/
+        retention-days: 30
+        
+    - name: Upload logs
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: extraction-logs
+        path: |
+          ${{ inputs.output_directory || 'build' }}/logs/
+        retention-days: 7
+        
+    - name: Display summary
+      if: always()
+      run: |
+        echo "=== EXTRACTION SUMMARY ==="
+        echo "Input directory: ${{ inputs.input_directory || 'docs' }}"
+        echo "Output directory: ${{ inputs.output_directory || 'build' }}"
+        echo "Verbose logging: ${{ inputs.verbose || 'false' }}"
+        
+        # Count files
+        MD_COUNT=$(find ${{ inputs.output_directory || 'build' }}/md -name "*.md" -type f 2>/dev/null | wc -l || echo "0")
+        CSV_COUNT=$(find ${{ inputs.output_directory || 'build' }}/csv -name "*.csv" -type f 2>/dev/null | wc -l || echo "0")
+        LOG_COUNT=$(find ${{ inputs.output_directory || 'build' }}/logs -name "*.log" -type f 2>/dev/null | wc -l || echo "0")
+        
+        echo "Markdown files created: $MD_COUNT"
+        echo "CSV files created: $CSV_COUNT"
+        echo "Log files created: $LOG_COUNT"
+        
+        if [ -f "${{ inputs.output_directory || 'build' }}/logs/extraction_"*".log" ]; then
+          echo "=== Latest Processing Log (last 50 lines) ==="
+          tail -50 ${{ inputs.output_directory || 'build' }}/logs/extraction_*.log 2>/dev/null || echo "No recent log available"
+        fi 

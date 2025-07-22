@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Processing outputs (keep build structure but ignore contents)
+build/logs/*
+!build/logs/.gitkeep
+build/md/*
+!build/md/.gitkeep
+build/csv/*
+!build/csv/.gitkeep
+
+# Large document files (users should add their own)
+*.pdf
+*.xlsx
+*.docx
+docs/*.pdf
+docs/*.xlsx
+docs/*.docx
+
+# But keep example files
+!example_*
+!sample_* 
