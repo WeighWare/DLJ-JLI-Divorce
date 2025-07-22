@@ -52,7 +52,8 @@ python extract_docs.py
 
 This will:
 - Process all PDF, Excel, and CSV files in `docs/`
-- Create organized subfolders for each document in `build/md/` and `build/csv/`
+- Automatically categorize documents (financial, legal, transcript, other)
+- Create category-organized folders in `build/md/` and `build/csv/`
 - Generate per-document processing logs in `build/logs/`
 - Create a master `build/index.json` with metadata
 - Display a summary table with processing results
@@ -130,28 +131,36 @@ project/
 │   ├── spreadsheet.xlsx
 │   └── data.csv
 ├── build/                   # Output directory
-│   ├── md/                  # Markdown files (organized by document)
-│   │   ├── document1/       # Per-document subfolder
-│   │   │   ├── p1.md       # Page 1 content
-│   │   │   ├── p2.md       # Page 2 content
-│   │   │   └── ...
-│   │   └── spreadsheet/
-│   │       ├── Sheet1.md
-│   │       └── Sheet2.md
-│   ├── csv/                 # CSV files (organized by document)
-│   │   ├── document1/       # Per-document subfolder
-│   │   │   ├── table1.csv  # Extracted tables
-│   │   │   └── table2.csv
-│   │   └── spreadsheet/
-│   │       ├── Sheet1.csv
-│   │       └── Sheet2.csv
+│   ├── md/                  # Markdown files (organized by category)
+│   │   ├── financial/       # Financial documents
+│   │   │   ├── bank_statement_p1.md
+│   │   │   ├── bank_statement_p2.md
+│   │   │   └── tax_return_Sheet1.md
+│   │   ├── legal/           # Legal documents
+│   │   │   ├── custody_agreement_p1.md
+│   │   │   ├── expert_report_p1.md
+│   │   │   └── expert_report_p2.md
+│   │   ├── transcript/      # Transcript documents
+│   │   │   ├── hearing_transcript_p1.md
+│   │   │   └── deposition_transcript_p1.md
+│   │   └── other/           # Other documents
+│   │       └── misc_document_p1.md
+│   ├── csv/                 # CSV files (organized by category)
+│   │   ├── financial/       # Financial data
+│   │   │   ├── bank_statement_table1.csv
+│   │   │   └── tax_return_Sheet1.csv
+│   │   ├── legal/           # Legal data
+│   │   │   ├── expert_report_table1.csv
+│   │   │   └── expert_report_table2.csv
+│   │   ├── transcript/      # Transcript data
+│   │   └── other/           # Other data
 │   ├── vectors/             # Vector database files (when --embed enabled)
 │   │   ├── chroma.sqlite3   # ChromaDB database
 │   │   └── index.faiss      # FAISS index (if using FAISS)
 │   ├── logs/                # Processing logs (per document)
-│   │   ├── document1.log
-│   │   ├── spreadsheet.log
-│   │   └── data.log
+│   │   ├── bank_statement.log
+│   │   ├── expert_report.log
+│   │   └── hearing_transcript.log
 │   └── index.json          # Master metadata index
 ├── extract_docs.py          # Main extraction script
 ├── requirements.txt         # Python dependencies
@@ -163,25 +172,33 @@ project/
 
 ### PDF Processing
 
-For each PDF document, creates a dedicated subfolder:
-- `build/md/<doc_id>/p1.md` - Page 1 content with metadata
-- `build/md/<doc_id>/p2.md` - Page 2 content with metadata
-- `build/csv/<doc_id>/table1.csv` - Extracted tables (if any)
+For each PDF document, files are organized by category:
+- `build/md/<category>/<doc_id>_p1.md` - Page 1 content with metadata
+- `build/md/<category>/<doc_id>_p2.md` - Page 2 content with metadata
+- `build/csv/<category>/<doc_id>_table1.csv` - Extracted tables (if any)
 - `build/logs/<doc_id>.log` - Processing log for this document
 
 ### Excel Processing
 
-For each Excel workbook, creates a dedicated subfolder:
-- `build/md/<doc_id>/Sheet1.md` - Sheet summary with metadata
-- `build/csv/<doc_id>/Sheet1.csv` - Sheet data
+For each Excel workbook, files are organized by category:
+- `build/md/<category>/<doc_id>_Sheet1.md` - Sheet summary with metadata
+- `build/csv/<category>/<doc_id>_Sheet1.csv` - Sheet data
 - `build/logs/<doc_id>.log` - Processing log for this workbook
 
 ### CSV Processing
 
-For each CSV file, creates a dedicated subfolder:
-- `build/md/<doc_id>/<doc_id>.md` - Summary with metadata
-- `build/csv/<doc_id>/<doc_id>.csv` - Processed data
+For each CSV file, files are organized by category:
+- `build/md/<category>/<doc_id>.md` - Summary with metadata
+- `build/csv/<category>/<doc_id>.csv` - Processed data
 - `build/logs/<doc_id>.log` - Processing log for this file
+
+### Category Organization
+
+Documents are automatically categorized and placed in appropriate folders:
+- **📝 financial/**: Bank statements, tax returns, financial reports
+- **⚖️ legal/**: Legal documents, reports, exhibits, affidavits
+- **📄 transcript/**: Court transcripts, depositions, hearing records
+- **📁 other/**: All other document types
 
 ### Chunk Metadata
 
@@ -203,17 +220,31 @@ The `build/index.json` file contains metadata for all processed documents:
 
 ```json
 {
-  "document1": {
-    "filename": "document1.pdf",
+  "expert_report": {
+    "doc_id": "expert_report",
+    "filename": "expert_report.pdf",
     "hash": "a1b2c3d4e5f678...",
     "type": "pdf",
     "category": "legal",
     "pages": 5,
-    "output_md": ["md/document1/p1.md", "md/document1/p2.md", ...],
-    "output_csv": ["csv/document1/table1.csv"],
-    "log": "logs/document1.log",
+    "output_md": ["md/legal/expert_report_p1.md", "md/legal/expert_report_p2.md", ...],
+    "output_csv": ["csv/legal/expert_report_table1.csv"],
+    "log": "logs/expert_report.log",
     "status": "completed",
     "created": "2024-01-15T10:30:00"
+  },
+  "bank_statement": {
+    "doc_id": "bank_statement",
+    "filename": "bank_statement.xlsx",
+    "hash": "b2c3d4e5f6789a...",
+    "type": "excel",
+    "category": "financial",
+    "pages": 2,
+    "output_md": ["md/financial/bank_statement_Sheet1.md", "md/financial/bank_statement_Sheet2.md"],
+    "output_csv": ["csv/financial/bank_statement_Sheet1.csv", "csv/financial/bank_statement_Sheet2.csv"],
+    "log": "logs/bank_statement.log",
+    "status": "completed",
+    "created": "2024-01-15T10:35:00"
   }
 }
 ```
@@ -282,12 +313,12 @@ Testing search with query: 'financial statements'
 
 Search results:
   1. Score: 0.85
-     Source: md/bank_statements/p1.md
+     Source: md/financial/bank_statement_p1.md
      Category: financial
      Content preview: The monthly bank statement shows deposits totaling $15,000...
 
   2. Score: 0.82
-     Source: md/expert_report/p5.md
+     Source: md/legal/expert_report_p5.md
      Category: legal
      Content preview: Analysis of financial records indicates significant...
 ```

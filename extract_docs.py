@@ -364,8 +364,16 @@ class DocumentExtractor:
         self.logs_dir = self.output_dir / "logs"
         self.vector_dir = self.output_dir / "vectors"
         
+        # Create category subdirectories
+        self.categories = ["financial", "legal", "transcript", "other"]
+        
         for dir_path in [self.md_dir, self.csv_dir, self.logs_dir, self.vector_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
+            
+        # Create category subdirectories under md and csv
+        for category in self.categories:
+            (self.md_dir / category).mkdir(exist_ok=True)
+            (self.csv_dir / category).mkdir(exist_ok=True)
             
         # Initialize master index
         self.index_file = self.output_dir / "index.json"
@@ -661,8 +669,9 @@ hash: {file_hash}
             return results
             
         try:
-            # Create document-specific subdirectory
-            doc_md_dir = self.md_dir / doc_id
+            # Create category-specific subdirectory
+            category = self._infer_category(pdf_path.name)
+            doc_md_dir = self.md_dir / category
             doc_md_dir.mkdir(exist_ok=True)
             
             converter = self.processors["markitdown"]
@@ -676,7 +685,7 @@ hash: {file_hash}
                 
                 for page_info in pages_info:
                     page_num = page_info["page_number"]
-                    md_file = doc_md_dir / f"p{page_num}.md"
+                    md_file = doc_md_dir / f"{doc_id}_p{page_num}.md"
                     
                     # Use page-specific text if available, otherwise estimate from full content
                     if page_info["text_length"] > 0:
@@ -745,9 +754,10 @@ hash: {file_hash}
             return results
             
         try:
-            # Create document-specific subdirectories
-            doc_md_dir = self.md_dir / doc_id
-            doc_csv_dir = self.csv_dir / doc_id
+            # Create category-specific subdirectories
+            category = self._infer_category(pdf_path.name)
+            doc_md_dir = self.md_dir / category
+            doc_csv_dir = self.csv_dir / category
             doc_md_dir.mkdir(exist_ok=True)
             doc_csv_dir.mkdir(exist_ok=True)
             
@@ -758,7 +768,7 @@ hash: {file_hash}
             
             # Extract content per page
             for page_num, page in enumerate(doc.pages, 1):
-                md_file = doc_md_dir / f"p{page_num}.md"
+                md_file = doc_md_dir / f"{doc_id}_p{page_num}.md"
                 
                 # Get page content
                 page_text = page.text if hasattr(page, 'text') else str(page)
@@ -797,7 +807,7 @@ hash: {file_hash}
             if hasattr(doc, 'tables'):
                 for table_idx, table in enumerate(doc.tables):
                     page_num = getattr(table, 'page_number', 1)
-                    csv_file = doc_csv_dir / f"table{table_idx + 1}.csv"
+                    csv_file = doc_csv_dir / f"{doc_id}_table{table_idx + 1}.csv"
                     
                     # Convert table to DataFrame
                     if hasattr(table, 'to_dataframe'):
@@ -838,8 +848,9 @@ hash: {file_hash}
             return results
             
         try:
-            # Create document-specific subdirectory
-            doc_csv_dir = self.csv_dir / doc_id
+            # Create category-specific subdirectory
+            category = self._infer_category(pdf_path.name)
+            doc_csv_dir = self.csv_dir / category
             doc_csv_dir.mkdir(exist_ok=True)
             
             # Extract tables with camelot
@@ -847,7 +858,7 @@ hash: {file_hash}
             
             for table_idx, table in enumerate(tables):
                 page_num = table.page
-                csv_file = doc_csv_dir / f"table{table_idx + 1}.csv"
+                csv_file = doc_csv_dir / f"{doc_id}_table{table_idx + 1}.csv"
                 
                 # Save table as CSV
                 table.to_csv(str(csv_file))
@@ -893,6 +904,7 @@ hash: {file_hash}
         category = self._infer_category(pdf_path.name)
         
         results = {
+            "doc_id": doc_id,
             "filename": pdf_path.name,
             "hash": file_hash,
             "type": "pdf",
@@ -939,12 +951,12 @@ hash: {file_hash}
             
             # Fallback: pdfplumber for basic text extraction
             if not processed_pages and PDFTOOLS_AVAILABLE:
-                doc_md_dir = self.md_dir / doc_id
+                doc_md_dir = self.md_dir / category
                 doc_md_dir.mkdir(exist_ok=True)
                 
                 for page_info in pages_info:
                     page_num = page_info["page_number"]
-                    md_file = doc_md_dir / f"p{page_num}.md"
+                    md_file = doc_md_dir / f"{doc_id}_p{page_num}.md"
                     
                     # Create chunk metadata
                     chunk_metadata = self._create_chunk_metadata(
@@ -1016,6 +1028,7 @@ hash: {file_hash}
         category = self._infer_category(excel_path.name)
         
         results = {
+            "doc_id": doc_id,
             "filename": excel_path.name,
             "hash": file_hash,
             "type": "excel",
@@ -1029,9 +1042,9 @@ hash: {file_hash}
         }
         
         try:
-            # Create document-specific subdirectories
-            doc_md_dir = self.md_dir / doc_id
-            doc_csv_dir = self.csv_dir / doc_id
+            # Create category-specific subdirectories
+            doc_md_dir = self.md_dir / category
+            doc_csv_dir = self.csv_dir / category
             doc_md_dir.mkdir(exist_ok=True)
             doc_csv_dir.mkdir(exist_ok=True)
             
@@ -1044,11 +1057,11 @@ hash: {file_hash}
                 safe_sheet = "".join(c for c in sheet_name if c.isalnum() or c in "._-")
                 
                 # Save CSV
-                csv_file = doc_csv_dir / f"{safe_sheet}.csv"
+                csv_file = doc_csv_dir / f"{doc_id}_{safe_sheet}.csv"
                 df.to_csv(csv_file, index=False)
                 
                 # Create Markdown summary
-                md_file = doc_md_dir / f"{safe_sheet}.md"
+                md_file = doc_md_dir / f"{doc_id}_{safe_sheet}.md"
                 
                 # Create chunk metadata (using sheet index as page number)
                 chunk_metadata = self._create_chunk_metadata(
@@ -1125,6 +1138,7 @@ hash: {file_hash}
         category = self._infer_category(csv_path.name)
         
         results = {
+            "doc_id": doc_id,
             "filename": csv_path.name,
             "hash": file_hash,
             "type": "csv",
@@ -1138,9 +1152,9 @@ hash: {file_hash}
         }
         
         try:
-            # Create document-specific subdirectories
-            doc_md_dir = self.md_dir / doc_id
-            doc_csv_dir = self.csv_dir / doc_id
+            # Create category-specific subdirectories
+            doc_md_dir = self.md_dir / category
+            doc_csv_dir = self.csv_dir / category
             doc_md_dir.mkdir(exist_ok=True)
             doc_csv_dir.mkdir(exist_ok=True)
             
