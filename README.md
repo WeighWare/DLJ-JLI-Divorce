@@ -9,6 +9,11 @@ A comprehensive Python tool for extracting content from divorce-related document
 - **Per-page Extraction**: Creates individual Markdown files for each PDF page
 - **Table Extraction**: Extracts tables to separate CSV files
 - **Excel Processing**: Handles all sheets in Excel workbooks
+- **Document Categorization**: Automatically tags documents as transcript, financial, legal, or other
+- **Chunk Metadata**: Embeds traceability metadata in all Markdown files
+- **Duplicate Detection**: SHA-256 hashing prevents reprocessing identical files
+- **Summary Reporting**: Visual status table showing processing results
+- **Per-document Organization**: Creates subfolders for each document's outputs
 - **Automated Workflow**: GitHub Actions support for CI/CD processing
 
 ## Installation
@@ -45,9 +50,10 @@ python extract_docs.py
 
 This will:
 - Process all PDF, Excel, and CSV files in `docs/`
-- Create Markdown files in `build/md/`
-- Create CSV files in `build/csv/`
-- Generate processing logs in `build/logs/`
+- Create organized subfolders for each document in `build/md/` and `build/csv/`
+- Generate per-document processing logs in `build/logs/`
+- Create a master `build/index.json` with metadata
+- Display a summary table with processing results
 
 ### Command Line Options
 
@@ -83,9 +89,26 @@ project/
 │   ├── spreadsheet.xlsx
 │   └── data.csv
 ├── build/                   # Output directory
-│   ├── md/                  # Markdown files (per page/sheet)
-│   ├── csv/                 # CSV files (tables and data)
-│   └── logs/                # Processing logs
+│   ├── md/                  # Markdown files (organized by document)
+│   │   ├── document1/       # Per-document subfolder
+│   │   │   ├── p1.md       # Page 1 content
+│   │   │   ├── p2.md       # Page 2 content
+│   │   │   └── ...
+│   │   └── spreadsheet/
+│   │       ├── Sheet1.md
+│   │       └── Sheet2.md
+│   ├── csv/                 # CSV files (organized by document)
+│   │   ├── document1/       # Per-document subfolder
+│   │   │   ├── table1.csv  # Extracted tables
+│   │   │   └── table2.csv
+│   │   └── spreadsheet/
+│   │       ├── Sheet1.csv
+│   │       └── Sheet2.csv
+│   ├── logs/                # Processing logs (per document)
+│   │   ├── document1.log
+│   │   ├── spreadsheet.log
+│   │   └── data.log
+│   └── index.json          # Master metadata index
 ├── extract_docs.py          # Main extraction script
 ├── requirements.txt         # Python dependencies
 ├── env.example             # Environment configuration template
@@ -96,21 +119,60 @@ project/
 
 ### PDF Processing
 
-For each PDF page, creates:
-- `build/md/<filename>_p<page>.md` - Markdown content
-- `build/csv/<filename>_p<page>_table<idx>.csv` - Extracted tables (if any)
+For each PDF document, creates a dedicated subfolder:
+- `build/md/<doc_id>/p1.md` - Page 1 content with metadata
+- `build/md/<doc_id>/p2.md` - Page 2 content with metadata
+- `build/csv/<doc_id>/table1.csv` - Extracted tables (if any)
+- `build/logs/<doc_id>.log` - Processing log for this document
 
 ### Excel Processing
 
-For each Excel sheet, creates:
-- `build/md/<filename>_<sheet>.md` - Markdown summary
-- `build/csv/<filename>_<sheet>.csv` - Sheet data
+For each Excel workbook, creates a dedicated subfolder:
+- `build/md/<doc_id>/Sheet1.md` - Sheet summary with metadata
+- `build/csv/<doc_id>/Sheet1.csv` - Sheet data
+- `build/logs/<doc_id>.log` - Processing log for this workbook
 
 ### CSV Processing
 
-For each CSV file, creates:
-- `build/md/<filename>.md` - Markdown summary
-- `build/csv/<filename>.csv` - Processed data
+For each CSV file, creates a dedicated subfolder:
+- `build/md/<doc_id>/<doc_id>.md` - Summary with metadata
+- `build/csv/<doc_id>/<doc_id>.csv` - Processed data
+- `build/logs/<doc_id>.log` - Processing log for this file
+
+### Chunk Metadata
+
+All Markdown files include embedded metadata for traceability:
+
+```html
+<!--
+chunk_id: document1_p1
+source: document1.pdf
+page: 1
+category: legal
+hash: a1b2c3d4e5f678...
+-->
+```
+
+### Master Index
+
+The `build/index.json` file contains metadata for all processed documents:
+
+```json
+{
+  "document1": {
+    "filename": "document1.pdf",
+    "hash": "a1b2c3d4e5f678...",
+    "type": "pdf",
+    "category": "legal",
+    "pages": 5,
+    "output_md": ["md/document1/p1.md", "md/document1/p2.md", ...],
+    "output_csv": ["csv/document1/table1.csv"],
+    "log": "logs/document1.log",
+    "status": "completed",
+    "created": "2024-01-15T10:30:00"
+  }
+}
+```
 
 ## Processing Methods
 
@@ -121,6 +183,38 @@ The tool uses multiple extraction methods with intelligent fallbacks:
 3. **Camelot**: Table extraction from PDFs using computer vision
 4. **pdfplumber**: Fallback text extraction for challenging PDFs
 5. **pandas**: Excel and CSV processing with data type inference
+
+## Document Categorization
+
+The tool automatically categorizes documents based on filename patterns:
+
+- **📝 Transcript**: Files containing "transcript"
+- **💰 Financial**: Files containing "bank" or "statement"
+- **⚖️ Legal**: Files containing "report", "exhibit", or "affidavit"
+- **📄 Other**: All other files
+
+Categories are included in the index.json metadata and chunk metadata for enhanced organization and searchability.
+
+## Processing Results
+
+After processing completes, the tool displays a summary table:
+
+```
+==================================================
+| File                         | Status     |
+|------------------------------|------------|
+| expert_report.pdf            | ✅ OK       |
+| bank_statement.xlsx          | ✅ OK       |
+| duplicate_file.pdf           | ⚠️ Skipped  |
+| corrupted_data.csv           | ❌ Failed   |
+==================================================
+```
+
+Status indicators:
+- **✅ OK**: Successfully processed
+- **❌ Failed**: Processing encountered errors  
+- **⚠️ Skipped**: Duplicate file (already processed)
+- **❓ Unknown**: Unexpected status
 
 ## GitHub Actions Integration
 
@@ -196,11 +290,17 @@ The tool automatically:
 
 ## Supported File Types
 
-| Extension | Processing Method | Output |
-|-----------|------------------|---------|
-| `.pdf` | MarkItDown, Docling, pdfplumber, Camelot | Per-page MD + tables CSV |
-| `.xlsx` | pandas | Per-sheet MD + CSV |
-| `.csv` | pandas | Summary MD + processed CSV |
+| Extension | Processing Method | Output | Auto-Categorization |
+|-----------|------------------|---------|-------------------|
+| `.pdf` | MarkItDown, Docling, pdfplumber, Camelot | Per-page MD + tables CSV | ✅ Based on filename |
+| `.xlsx` | pandas | Per-sheet MD + CSV | ✅ Based on filename |
+| `.csv` | pandas | Summary MD + processed CSV | ✅ Based on filename |
+
+All outputs include:
+- **Chunk metadata** embedded in Markdown files
+- **Document categorization** (transcript/financial/legal/other)
+- **Duplicate detection** via SHA-256 hashing
+- **Per-document organization** in subfolders
 
 ## Contributing
 
