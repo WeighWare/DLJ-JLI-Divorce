@@ -1,4 +1,4 @@
-name: Document Extraction Workflow
+name: Document Extraction Workflow with Embeddings
 
 on:
   workflow_dispatch:
@@ -12,6 +12,43 @@ on:
         description: 'Output directory for processed files'
         required: false
         default: 'build'
+        type: string
+      enable_embeddings:
+        description: 'Enable document chunking and embedding'
+        required: false
+        default: false
+        type: boolean
+      embedding_model:
+        description: 'OpenAI embedding model'
+        required: false
+        default: 'text-embedding-3-small'
+        type: choice
+        options:
+          - 'text-embedding-3-small'
+          - 'text-embedding-3-large'
+          - 'text-embedding-ada-002'
+      vector_db:
+        description: 'Vector database type'
+        required: false
+        default: 'chromadb'
+        type: choice
+        options:
+          - 'chromadb'
+          - 'faiss'
+      chunk_size:
+        description: 'Text chunk size for embedding'
+        required: false
+        default: '1000'
+        type: string
+      chunk_overlap:
+        description: 'Overlap between chunks'
+        required: false
+        default: '200'
+        type: string
+      search_query:
+        description: 'Test search query (requires embeddings)'
+        required: false
+        default: ''
         type: string
       verbose:
         description: 'Enable verbose logging'
@@ -42,39 +79,158 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
+    - name: Verify OpenAI API key
+      if: inputs.enable_embeddings == true
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      run: |
+        if [ -z "$OPENAI_API_KEY" ]; then
+          echo "❌ ERROR: OPENAI_API_KEY secret is required for embeddings!"
+          echo "Please add your OpenAI API key as a repository secret."
+          exit 1
+        else
+          echo "✅ OpenAI API key is configured"
+        fi
+        
     - name: Create input directory if it doesn't exist
       run: |
         mkdir -p ${{ inputs.input_directory || 'docs' }}
         
+    - name: Check for documents
+      run: |
+        echo "=== 📁 Checking for input documents ==="
+        INPUT_DIR="${{ inputs.input_directory || 'docs' }}"
+        
+        PDF_COUNT=$(find "$INPUT_DIR" -name "*.pdf" -type f 2>/dev/null | wc -l || echo "0")
+        XLSX_COUNT=$(find "$INPUT_DIR" -name "*.xlsx" -type f 2>/dev/null | wc -l || echo "0")
+        CSV_COUNT=$(find "$INPUT_DIR" -name "*.csv" -type f 2>/dev/null | wc -l || echo "0")
+        
+        echo "📄 PDF files: $PDF_COUNT"
+        echo "📊 Excel files: $XLSX_COUNT"
+        echo "📋 CSV files: $CSV_COUNT"
+        
+        if [ "$PDF_COUNT" -eq 0 ] && [ "$XLSX_COUNT" -eq 0 ] && [ "$CSV_COUNT" -eq 0 ]; then
+          echo "⚠️  No documents found in $INPUT_DIR"
+          echo "Please add PDF, Excel, or CSV files to process."
+        else
+          echo "✅ Found $((PDF_COUNT + XLSX_COUNT + CSV_COUNT)) documents to process"
+          find "$INPUT_DIR" -type f \( -name "*.pdf" -o -name "*.xlsx" -o -name "*.csv" \) -exec ls -lh {} \;
+        fi
+        
     - name: Run document extraction
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
-        python extract_docs.py \
-          --input "${{ inputs.input_directory || 'docs' }}" \
-          --output "${{ inputs.output_directory || 'build' }}" \
-          ${{ inputs.verbose && '--verbose' || '' }}
+        # Build command with inputs
+        CMD="python extract_docs.py"
+        CMD="$CMD --input '${{ inputs.input_directory || 'docs' }}'"
+        CMD="$CMD --output '${{ inputs.output_directory || 'build' }}'"
+        
+        if [ "${{ inputs.verbose }}" = "true" ]; then
+          CMD="$CMD --verbose"
+        fi
+        
+        if [ "${{ inputs.enable_embeddings }}" = "true" ]; then
+          CMD="$CMD --embed"
+          CMD="$CMD --embedding-model '${{ inputs.embedding_model || 'text-embedding-3-small' }}'"
+          CMD="$CMD --vector-db '${{ inputs.vector_db || 'chromadb' }}'"
+          CMD="$CMD --chunk-size '${{ inputs.chunk_size || '1000' }}'"
+          CMD="$CMD --chunk-overlap '${{ inputs.chunk_overlap || '200' }}'"
           
-    - name: List extracted files
+          if [ -n "${{ inputs.search_query }}" ]; then
+            CMD="$CMD --search '${{ inputs.search_query }}'"
+          fi
+        fi
+        
+        echo "🚀 Running: $CMD"
+        eval $CMD
+        
+    - name: Display category organization
       run: |
-        echo "=== Extracted Markdown Files ==="
-        find ${{ inputs.output_directory || 'build' }}/md -name "*.md" -type f | head -20 || echo "No markdown files found"
+        echo "=== 📂 CATEGORY-BASED ORGANIZATION ==="
+        OUTPUT_DIR="${{ inputs.output_directory || 'build' }}"
         
-        echo "=== Extracted CSV Files ==="
-        find ${{ inputs.output_directory || 'build' }}/csv -name "*.csv" -type f | head -20 || echo "No CSV files found"
+        echo ""
+        echo "📝 Markdown Files by Category:"
+        for category in financial legal transcript other; do
+          if [ -d "$OUTPUT_DIR/md/$category" ]; then
+            count=$(find "$OUTPUT_DIR/md/$category" -name "*.md" -type f 2>/dev/null | wc -l || echo "0")
+            if [ "$count" -gt 0 ]; then
+              echo "  📁 $category/: $count files"
+              find "$OUTPUT_DIR/md/$category" -name "*.md" -type f | head -3 | sed 's/^/    📄 /'
+            fi
+          fi
+        done
         
-        echo "=== Processing Logs ==="
-        find ${{ inputs.output_directory || 'build' }}/logs -name "*.log" -type f | head -10 || echo "No log files found"
+        echo ""
+        echo "📊 CSV Files by Category:"
+        for category in financial legal transcript other; do
+          if [ -d "$OUTPUT_DIR/csv/$category" ]; then
+            count=$(find "$OUTPUT_DIR/csv/$category" -name "*.csv" -type f 2>/dev/null | wc -l || echo "0")
+            if [ "$count" -gt 0 ]; then
+              echo "  📁 $category/: $count files"
+              find "$OUTPUT_DIR/csv/$category" -name "*.csv" -type f | head -3 | sed 's/^/    📊 /'
+            fi
+          fi
+        done
         
-    - name: Upload extraction results
+    - name: Show vector database info
+      if: inputs.enable_embeddings == true
+      run: |
+        OUTPUT_DIR="${{ inputs.output_directory || 'build' }}"
+        echo "=== 🧠 VECTOR DATABASE INFO ==="
+        
+        if [ -d "$OUTPUT_DIR/vectors" ]; then
+          echo "📁 Vector database files:"
+          ls -la "$OUTPUT_DIR/vectors/" | sed 's/^/  /'
+          
+          echo ""
+          echo "💾 Vector database size:"
+          du -sh "$OUTPUT_DIR/vectors/"* 2>/dev/null | sed 's/^/  /' || echo "  No vector files found"
+        else
+          echo "⚠️  No vector database directory found"
+        fi
+        
+    - name: Show index.json summary
+      run: |
+        OUTPUT_DIR="${{ inputs.output_directory || 'build' }}"
+        if [ -f "$OUTPUT_DIR/index.json" ]; then
+          echo "=== 📇 INDEX.JSON SUMMARY ==="
+          
+          # Count entries by category
+          echo "📊 Documents by category:"
+          for category in financial legal transcript other; do
+            count=$(jq -r "to_entries[] | select(.value.category == \"$category\") | .key" "$OUTPUT_DIR/index.json" 2>/dev/null | wc -l || echo "0")
+            if [ "$count" -gt 0 ]; then
+              echo "  📁 $category: $count documents"
+            fi
+          done
+          
+          total_docs=$(jq 'length' "$OUTPUT_DIR/index.json" 2>/dev/null || echo "0")
+          echo "  📋 Total documents: $total_docs"
+        fi
+        
+    - name: Upload category-organized results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: ingest-output
+        name: document-extraction-results
         path: |
           ${{ inputs.output_directory || 'build' }}/md/
           ${{ inputs.output_directory || 'build' }}/csv/
+          ${{ inputs.output_directory || 'build' }}/index.json
         retention-days: 30
         
-    - name: Upload logs
+    - name: Upload vector database
+      uses: actions/upload-artifact@v4
+      if: inputs.enable_embeddings == true
+      with:
+        name: vector-database
+        path: |
+          ${{ inputs.output_directory || 'build' }}/vectors/
+        retention-days: 30
+        
+    - name: Upload processing logs
       uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -83,24 +239,63 @@ jobs:
           ${{ inputs.output_directory || 'build' }}/logs/
         retention-days: 7
         
-    - name: Display summary
+    - name: Final summary
       if: always()
       run: |
-        echo "=== EXTRACTION SUMMARY ==="
-        echo "Input directory: ${{ inputs.input_directory || 'docs' }}"
-        echo "Output directory: ${{ inputs.output_directory || 'build' }}"
-        echo "Verbose logging: ${{ inputs.verbose || 'false' }}"
+        OUTPUT_DIR="${{ inputs.output_directory || 'build' }}"
+        echo "=== 🎉 EXTRACTION COMPLETE ==="
+        echo ""
+        echo "⚙️  Configuration:"
+        echo "  📁 Input: ${{ inputs.input_directory || 'docs' }}"
+        echo "  📤 Output: $OUTPUT_DIR"
+        echo "  🔍 Verbose: ${{ inputs.verbose || 'false' }}"
+        echo "  🧠 Embeddings: ${{ inputs.enable_embeddings || 'false' }}"
         
-        # Count files
-        MD_COUNT=$(find ${{ inputs.output_directory || 'build' }}/md -name "*.md" -type f 2>/dev/null | wc -l || echo "0")
-        CSV_COUNT=$(find ${{ inputs.output_directory || 'build' }}/csv -name "*.csv" -type f 2>/dev/null | wc -l || echo "0")
-        LOG_COUNT=$(find ${{ inputs.output_directory || 'build' }}/logs -name "*.log" -type f 2>/dev/null | wc -l || echo "0")
+        if [ "${{ inputs.enable_embeddings }}" = "true" ]; then
+          echo "  🤖 Model: ${{ inputs.embedding_model || 'text-embedding-3-small' }}"
+          echo "  🗃️  Vector DB: ${{ inputs.vector_db || 'chromadb' }}"
+          echo "  📏 Chunk size: ${{ inputs.chunk_size || '1000' }}"
+          echo "  🔗 Overlap: ${{ inputs.chunk_overlap || '200' }}"
+        fi
         
-        echo "Markdown files created: $MD_COUNT"
-        echo "CSV files created: $CSV_COUNT"
-        echo "Log files created: $LOG_COUNT"
+        echo ""
+        echo "📊 Results by Category:"
+        TOTAL_MD=0
+        TOTAL_CSV=0
         
-        if [ -f "${{ inputs.output_directory || 'build' }}/logs/extraction_"*".log" ]; then
-          echo "=== Latest Processing Log (last 50 lines) ==="
-          tail -50 ${{ inputs.output_directory || 'build' }}/logs/extraction_*.log 2>/dev/null || echo "No recent log available"
-        fi 
+        for category in financial legal transcript other; do
+          if [ -d "$OUTPUT_DIR/md/$category" ] || [ -d "$OUTPUT_DIR/csv/$category" ]; then
+            md_count=$(find "$OUTPUT_DIR/md/$category" -name "*.md" -type f 2>/dev/null | wc -l || echo "0")
+            csv_count=$(find "$OUTPUT_DIR/csv/$category" -name "*.csv" -type f 2>/dev/null | wc -l || echo "0")
+            
+            if [ "$md_count" -gt 0 ] || [ "$csv_count" -gt 0 ]; then
+              echo "  📂 $category: $md_count MD, $csv_count CSV"
+              TOTAL_MD=$((TOTAL_MD + md_count))
+              TOTAL_CSV=$((TOTAL_CSV + csv_count))
+            fi
+          fi
+        done
+        
+        LOG_COUNT=$(find "$OUTPUT_DIR/logs" -name "*.log" -type f 2>/dev/null | wc -l || echo "0")
+        
+        echo ""
+        echo "🎯 Totals:"
+        echo "  📝 Markdown files: $TOTAL_MD"
+        echo "  📊 CSV files: $TOTAL_CSV"
+        echo "  📋 Log files: $LOG_COUNT"
+        
+        if [ -f "$OUTPUT_DIR/index.json" ]; then
+          index_entries=$(jq 'length' "$OUTPUT_DIR/index.json" 2>/dev/null || echo "0")
+          echo "  📇 Indexed documents: $index_entries"
+        fi
+        
+        echo ""
+        echo "📦 Artifacts:"
+        echo "  📁 document-extraction-results (MD, CSV, index.json)"
+        if [ "${{ inputs.enable_embeddings }}" = "true" ]; then
+          echo "  🧠 vector-database (ChromaDB/FAISS files)"
+        fi
+        echo "  📋 extraction-logs (processing logs)"
+        
+        echo ""
+        echo "✅ Processing complete! Download artifacts above."

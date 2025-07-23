@@ -325,19 +325,100 @@ Search results:
 
 ## GitHub Actions Integration
 
-The repository includes a GitHub Actions workflow for automated processing:
+The repository includes an enhanced GitHub Actions workflow for automated document processing with advanced features:
 
 ### Manual Trigger
 
-1. Go to your repository's Actions tab
-2. Select "Document Extraction Workflow"
-3. Click "Run workflow"
-4. The workflow will process files and create artifacts
+1. Go to your repository's **Actions** tab
+2. Select **"Document Extraction Workflow with Embeddings"**
+3. Click **"Run workflow"**
+4. Configure options:
+   - **Input directory**: Source documents location (default: `docs`)
+   - **Output directory**: Results location (default: `build`)
+   - **Enable embeddings**: ✅ Enable vector search capabilities
+   - **Embedding model**: Choose OpenAI model (`text-embedding-3-small`, `text-embedding-3-large`, `text-embedding-ada-002`)
+   - **Vector database**: Choose storage (`chromadb`, `faiss`)
+   - **Chunk size/overlap**: Configure text chunking (defaults: 1000/200)
+   - **Search query**: Test search functionality (optional)
+   - **Verbose logging**: Enable detailed output
+5. Click **"Run workflow"**
 
 ### Workflow Features
 
-- Runs on `workflow_dispatch` (manual trigger)
-- Processes documents in the repository
+- **🚀 One-Click Processing**: Automated document extraction and categorization
+- **🧠 Vector Embeddings**: Optional semantic search capabilities with OpenAI
+- **📂 Category Organization**: Automatic sorting by financial, legal, transcript, other
+- **📦 Multiple Artifacts**: Organized downloads for different output types
+- **🔍 Smart Detection**: Validates OpenAI API key and counts documents by type
+- **📊 Enhanced Reporting**: Category breakdowns and processing statistics
+
+### Setup Requirements
+
+#### For Basic Processing (No API Key Needed):
+- Documents in `docs/` folder
+- Commit and push to trigger workflow
+
+#### For Embeddings & Search (Requires Setup):
+1. **Get OpenAI API Key**: [platform.openai.com](https://platform.openai.com)
+2. **Add as Repository Secret**:
+   - Go to repo **Settings** → **Secrets and variables** → **Actions**
+   - Click **"New repository secret"**
+   - Name: `OPENAI_API_KEY`
+   - Value: Your actual API key
+   - Click **"Add secret"**
+
+### Workflow Artifacts
+
+After processing, download these artifacts:
+
+1. **📁 document-extraction-results.zip**:
+   ```
+   md/
+   ├── financial/          # Bank statements, tax returns
+   ├── legal/              # Reports, exhibits, affidavits  
+   ├── transcript/         # Court transcripts, depositions
+   └── other/              # Other document types
+   csv/
+   ├── financial/          # Financial data tables
+   ├── legal/              # Legal document tables
+   └── transcript/         # Transcript data
+   index.json              # Master metadata file
+   ```
+
+2. **🧠 vector-database.zip** (if embeddings enabled):
+   ```
+   vectors/
+   ├── chroma.sqlite3      # ChromaDB database
+   └── index.faiss         # FAISS index files
+   ```
+
+3. **📋 extraction-logs.zip**:
+   ```
+   logs/
+   ├── document1.log       # Per-document processing logs
+   └── document2.log
+   ```
+
+### Processing Workflow
+
+1. **📥 Document Detection**: Scans for PDF, Excel, CSV files
+2. **🏷️ Auto-Categorization**: Classifies by filename patterns
+3. **📄 Content Extraction**: Processes with multiple tools (MarkItDown, Docling, etc.)
+4. **🗂️ Category Organization**: Places files in appropriate category folders
+5. **🧠 Vector Embeddings** (optional): Creates searchable database
+6. **📦 Artifact Creation**: Packages results for download
+
+### Example Workflow Run
+
+```
+🔍 Found 3 documents to process
+📊 Results by Category:
+  📂 financial: 2 MD, 1 CSV
+  📂 legal: 3 MD, 2 CSV
+🧠 Vector database: 1.2MB (ChromaDB)
+✅ Processing complete! Download artifacts above.
+```
+
 - Creates downloadable artifacts with results
 - Includes detailed logs and processing summary
 
